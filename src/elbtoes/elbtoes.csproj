@@ -6,6 +6,6 @@
   <ItemGroup>
     <PackageReference Include="AWSSDK.S3" Version="3.3.10.2" />
     <PackageReference Include="CommandLineParser" Version="2.1.1-beta" />
-    <PackageReference Include="System.Reactive" Version="4.0.0-preview00001" />
+    <PackageReference Include="Sprache" Version="2.1.0" />
   </ItemGroup>
 </Project>
