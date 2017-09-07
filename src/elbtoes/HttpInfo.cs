@@ -21,7 +21,9 @@ namespace elbtoes
         static Dictionary<string, string> GetQuery(string query)
         {
             var values = HttpUtility.ParseQueryString(query);
+            if (values == null) return null;
             var q = from string key in values.Keys
+                    where key != null
                     let theValues = values.GetValues(key)
                     where theValues != null && theValues.Length > 0
                     select new KeyValuePair<string, string>(key, theValues[0]);

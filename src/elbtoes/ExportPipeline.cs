@@ -1,4 +1,5 @@
 ﻿using Amazon;
+using Elasticsearch.Net.Aws;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -19,6 +20,8 @@ namespace elbtoes
         readonly TextWriter _output;
         readonly TextWriter _error;
         readonly HttpClient _client;
+        readonly string _bulkUrl;
+        readonly bool _signES;
         readonly S3Repository _s3;
 
         public ExportPipeline(ProgramOptions options, TextWriter output, TextWriter error)
@@ -27,51 +30,38 @@ namespace elbtoes
             _output = output;
             _error = error;
             _client = new HttpClient();
-            _client.BaseAddress = new Uri(options.Destination);
+            var url = new Uri(new Uri(options.Destination), "_bulk");
+            _bulkUrl = url.ToString();
+            _signES = url.Host.EndsWith("es.amazonaws.com");
             _s3 = new S3Repository(RegionEndpoint.GetBySystemName(options.Region));
         }
 
         public Task RunAsync()
         {
-            var concurrency = Environment.ProcessorCount;
+            var concurrency = 1;
             var batchSize = 1000;
             var download = new TransformBlock<string, TempFile>(
                 key => _s3.DownloadFileAsync(_options.BucketName, key),
                 new ExecutionDataflowBlockOptions { BoundedCapacity = concurrency });
-            var parse = new TransformManyBlock<TempFile, ElbLogEntry>(
-                (Func<TempFile, IEnumerable<ElbLogEntry>>)GetEntries,
-                new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = concurrency, BoundedCapacity = concurrency });
             var batch = new BatchBlock<ElbLogEntry>(batchSize, new GroupingDataflowBlockOptions { BoundedCapacity = batchSize * concurrency * 2 });
-            var serializer = new TransformBlock<ElbLogEntry[], HttpContent>(
-                (Func<ElbLogEntry[], HttpContent>)SerializeBatch,
+            var fileReader = new ActionBlock<TempFile>(
+                file => PostEntriesAsync(file, batch),
                 new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = concurrency, BoundedCapacity = concurrency });
-            var upload = new ActionBlock<HttpContent>(
+            var serializer = new TransformBlock<ElbLogEntry[], HttpRequestMessage>(
+                (Func<ElbLogEntry[], HttpRequestMessage>)SerializeBatch,
+                new ExecutionDataflowBlockOptions { MaxDegreeOfParallelism = concurrency, BoundedCapacity = concurrency });
+            var upload = new ActionBlock<HttpRequestMessage>(
                 UploadBatch,
                 new ExecutionDataflowBlockOptions { BoundedCapacity = concurrency * 2, MaxDegreeOfParallelism = concurrency });
 
             var linkOpts = new DataflowLinkOptions { PropagateCompletion = true };
-            download.LinkTo(parse, linkOpts);
-            parse.LinkTo(batch, linkOpts);
+            download.LinkTo(fileReader, linkOpts);
+            fileReader.PropagateCompletion(batch);
             batch.LinkTo(serializer, linkOpts);
             serializer.LinkTo(upload, linkOpts);
 
             _s3.PostFileNamesAsync(_options.BucketName, _options.Prefix, download)
-                .ContinueWith(t =>
-                {
-                    var block = (IDataflowBlock)download;
-                    if (t.IsFaulted)
-                    {
-                        block.Fault(t.Exception);
-                    }
-                    else if (t.IsCanceled)
-                    {
-                        block.Fault(new TaskCanceledException());
-                    }
-                    else
-                    {
-                        block.Complete();
-                    }
-                });
+                .PropagateCompletion(download);
             return upload.Completion;
         }
 
@@ -85,18 +75,18 @@ namespace elbtoes
             return result;
         }
 
-        private IEnumerable<ElbLogEntry> GetEntries(TempFile file)
+        private async Task PostEntriesAsync(TempFile file, ITargetBlock<ElbLogEntry> target)
         {
             using (file)
             using (var fs = file.OpenRead())
-            using (var reader = new StreamReader(fs))
+            using (var reader = new StreamReader(fs, Encoding.UTF8, true, 128 << 10))
             {
                 for (var line = reader.ReadLine(); line != null; line = reader.ReadLine())
                 {
                     var result = ElbLogEntry.TryParse(line);
                     if (result.WasSuccessful)
                     {
-                        yield return result.Value;
+                        await target.SendAsync(result.Value);
                     }
                 }
             }
@@ -105,7 +95,7 @@ namespace elbtoes
         static readonly Encoding _utf8NoBom = new UTF8Encoding(false);
         static readonly MediaTypeHeaderValue _contentType = new MediaTypeHeaderValue("application/json");
 
-        private HttpContent SerializeBatch(ElbLogEntry[] batch)
+        private HttpRequestMessage SerializeBatch(ElbLogEntry[] batch)
         {
             var serializer = new JsonSerializer();
             using (var ms = new MemoryStream())
@@ -113,15 +103,18 @@ namespace elbtoes
             {
                 writer.NewLine = "\n";
                 ElasticsearchUtil.WriteBulkEntries(batch, writer);
-                var result = new ByteArrayContent(ms.ToArray());
-                result.Headers.ContentType = _contentType;
-                return result;
+                var bytes = ms.ToArray();
+                var request = new HttpRequestMessage(HttpMethod.Post, _bulkUrl);
+                request.Content = new ByteArrayContent(bytes);
+                request.Content.Headers.ContentType = _contentType;
+                CredentialChainProvider.Default.Sign(request, bytes);
+                return request;
             }
         }
 
-        private async Task UploadBatch(HttpContent bulkPayload)
+        private async Task UploadBatch(HttpRequestMessage bulkRequest)
         {
-            var response = await _client.PostAsync("_bulk", bulkPayload);
+            var response = await _client.SendAsync(bulkRequest);
             if (!response.IsSuccessStatusCode)
             {
                 var body = await response.Content.ReadAsStringAsync();
