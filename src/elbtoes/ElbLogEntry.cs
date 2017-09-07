@@ -1,9 +1,8 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Text.RegularExpressions;
 using Sprache;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Converters;
 
 namespace elbtoes
 {
@@ -11,35 +10,22 @@ namespace elbtoes
     {
         public static IResult<ElbLogEntry> TryParse(string line) => LogEntry.TryParse(line);
 
-        static readonly Parser<string> NonWhitespaceToken = Parse.Token(Parse.AnyChar.Until(Parse.WhiteSpace)).Select(v => new string(v.ToArray()));
-
-        static readonly Parser<double> DoubleToken = Parse.Token(Parse.Decimal.Select(n => double.Parse(n)));
-
-        static readonly Parser<long> LongToken = Parse.Token(
-            from sign in Parse.Optional(Parse.Char('-'))
-            from number in Parse.Number
-            select long.Parse((sign.IsDefined ? "-" : "") + number));
-
-        static readonly Parser<int> StatusCode = Parse.Number.Select(i => int.Parse(i));
-
-        static readonly Parser<int?> OptionalStatusCodeToken = Parse.Token(
-            StatusCode.Select(i => (int?)i)
-            .Or(
-                Parse.Char('-').Then(c => Parse.Optional(StatusCode.Select(code => (int?)-code)).Select(o => o.IsDefined? o.Get() : null))
-            ));
-
         static readonly Parser<ElbLogEntry> LogEntry =
-            from timestamp in NonWhitespaceToken
-            from elb_name in NonWhitespaceToken
-            from client_endpoint in NonWhitespaceToken
-            from backend_endpoint in NonWhitespaceToken
-            from request_processing_time in DoubleToken
-            from backend_processing_time in DoubleToken
-            from response_processing_time in DoubleToken
-            from elb_status_code in OptionalStatusCodeToken
-            from backend_status_code in OptionalStatusCodeToken
-            from received_bytes in LongToken
-            from sent_bytes in LongToken
+            from timestamp in Parse.Token(Parsers.Timestamp)
+            from elb_name in Parsers.NonWhitespaceToken
+            from client_endpoint in Parsers.NonWhitespaceToken
+            from backend_endpoint in Parsers.NonWhitespaceToken
+            from request_processing_time in Parsers.DoubleToken
+            from backend_processing_time in Parsers.DoubleToken
+            from response_processing_time in Parsers.DoubleToken
+            from elb_status_code in Parsers.OptionalStatusCodeToken
+            from backend_status_code in Parsers.OptionalStatusCodeToken
+            from received_bytes in Parsers.LongToken
+            from sent_bytes in Parsers.LongToken
+            from http in Parse.Token(Parsers.Quoted(HttpInfo.Parser))
+            from user_agent in Parse.Token(Parsers.QuotedString)
+            from ssl_cypher in Parsers.NonWhitespaceToken
+            from ssl_protocol in Parsers.NonWhitespaceToken
             select new ElbLogEntry
             {
                 timestamp = timestamp,
@@ -51,9 +37,16 @@ namespace elbtoes
                 response_processing_time = response_processing_time,
                 elb_status_code = elb_status_code,
                 backend_status_code = backend_status_code,
+                received_bytes = received_bytes,
+                sent_bytes = sent_bytes,
+                request = http,
+                user_agent = user_agent,
+                ssl_cypher = ssl_cypher,
+                ssl_protocol = ssl_protocol,
             };
 
-        public string timestamp;
+        [JsonConverter(typeof(IsoDateTimeConverter))]
+        public DateTime timestamp;
         public string elb_name;
         public string client_endpoint;
         public string backend_endpoint;
@@ -64,7 +57,7 @@ namespace elbtoes
         public int? backend_status_code;
         public long received_bytes;
         public long sent_bytes;
-        // todo - request
+        public HttpInfo request;
         public string user_agent;
         public string ssl_cypher;
         public string ssl_protocol;
