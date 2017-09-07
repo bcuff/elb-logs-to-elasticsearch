@@ -38,7 +38,7 @@ namespace elbtoes
 
         public Task RunAsync()
         {
-            var concurrency = 1;
+            var concurrency = Environment.ProcessorCount;
             var batchSize = 1000;
             var download = new TransformBlock<string, TempFile>(
                 key => _s3.DownloadFileAsync(_options.BucketName, key),
