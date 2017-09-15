@@ -21,7 +21,7 @@ namespace elbtoes
         public static void WriteBulkEntry(ElbLogEntry entry, TextWriter writer)
         {
             // todo - use time based index
-            var header = new { index = new { _index = "elb-logs", _type = "elb-log-entry", _id = Guid.NewGuid() } };
+            var header = new { index = new { _index = "elb-logs", _type = "elb-log-entry", _id = entry.id } };
             _serializer.Serialize(writer, header);
             writer.WriteLine();
             _serializer.Serialize(writer, entry);

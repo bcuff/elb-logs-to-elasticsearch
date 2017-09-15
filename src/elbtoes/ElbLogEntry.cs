@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using Sprache;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
@@ -8,7 +10,24 @@ namespace elbtoes
 {
     public class ElbLogEntry
     {
-        public static IResult<ElbLogEntry> TryParse(string line) => LogEntry.TryParse(line);
+        static readonly Encoding _encoding = new UTF8Encoding(false);
+        static readonly char[] _padding = new[] { '=' };
+        public static IResult<ElbLogEntry> TryParse(string line)
+        {
+            var result = LogEntry.TryParse(line);
+            if (!result.WasSuccessful) return result;
+            byte[] hash;
+            using (var algo = SHA256.Create())
+            {
+                var bytes = _encoding.GetBytes(line);
+                hash = algo.ComputeHash(bytes);
+            }
+            result.Value.id = Convert.ToBase64String(hash)
+                .TrimEnd(_padding)
+                .Replace('+', '-')
+                .Replace('/', '_');
+            return result;
+        }
 
         static readonly Parser<ElbLogEntry> LogEntry =
             from timestamp in Parse.Token(Parsers.Timestamp)
@@ -45,6 +64,8 @@ namespace elbtoes
                 ssl_protocol = ssl_protocol,
             };
 
+        [JsonIgnore]
+        public string id { get; private set; }
         [JsonConverter(typeof(IsoDateTimeConverter))]
         public DateTime timestamp;
         public string elb_name;

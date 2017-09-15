@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using Xunit;
 using elbtoes;
@@ -24,6 +25,44 @@ namespace Tests
                 Assert.True(result.WasSuccessful, message);
             }
             return result.Value;
+        }
+
+        [Theory]
+        [InlineData(httpSample)]
+        [InlineData(httpsSample)]
+        [InlineData(tcpSample)]
+        [InlineData(sslSample)]
+        public void ids_are_valid(string sample)
+        {
+            Assert.Equal(false, string.IsNullOrWhiteSpace(Entry(sample).id));
+        }
+
+        [Theory]
+        [InlineData(httpSample)]
+        [InlineData(httpsSample)]
+        [InlineData(tcpSample)]
+        [InlineData(sslSample)]
+        public void ids_are_persistent(string sample)
+        {
+            var a = Entry(sample).id;
+            var b = Entry(sample).id;
+            Assert.Equal(a, b);
+        }
+
+        [Fact]
+        public void ids_are_unique()
+        {
+            var set = new HashSet<string>(new[] {
+                Entry(httpSample).id,
+                Entry(httpsSample).id,
+                Entry(tcpSample).id,
+                Entry(sslSample).id,
+                Entry(httpSample).id,
+                Entry(httpsSample).id,
+                Entry(tcpSample).id,
+                Entry(sslSample).id,
+            });
+            Assert.Equal(4, set.Count);
         }
 
         [Theory]
